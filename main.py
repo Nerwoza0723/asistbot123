@@ -14,9 +14,7 @@ from aiogram.types import Message
 # НАСТРОЙКИ
 # =========================
 
-TELEGRAM_BOT_TOKEN = os.getenv(BOT_TOKEN)
-
-if not TELEGRAM_BOT_TOKEN:
+if not BOT_TOKEN:
     raise RuntimeError(
         "Не задан токен. Добавьте переменную окружения BOT_TOKEN."
     )
@@ -28,7 +26,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
