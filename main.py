@@ -13,6 +13,7 @@ from aiogram.types import Message
 # =========================
 # НАСТРОЙКИ
 # =========================
+BOT_TOKEN = "8674246097:AAHtXZW5BRIIYE7qOg4EiiSJ_hpCBmFE2zo"
 
 if not BOT_TOKEN:
     raise RuntimeError(
