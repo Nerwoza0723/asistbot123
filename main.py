@@ -151,4 +151,4 @@ def delete_task(user_id: int, task_id: int) -> bool:
     return changed
 
 
-def get_due_tasks()
+def get_due_tasks():
