@@ -151,4 +151,30 @@ def delete_task(user_id: int, task_id: int) -> bool:
     return changed
 
 
-def get_due_tasks():
+def get_due_tasks() -> list:
+    tasks = load_tasks()
+    now = datetime.now()
+    due_tasks = []
+
+    for task in tasks:
+        if task.get("done", False):
+            continue
+
+        if task.get("notified", False):
+            continue
+
+        try:
+            remind_at = datetime.fromisoformat(
+                task["remind_at"]
+            )
+        except ValueError:
+            logging.error(
+                "Неверная дата у задачи #%s",
+                task.get("id")
+            )
+            continue
+
+        if remind_at <= now:
+            due_tasks.append(task)
+
+    return due_tasks
