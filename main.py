@@ -14,7 +14,7 @@ from aiogram.types import Message
 # НАСТРОЙКИ
 # =========================
 
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv(BOT_TOKEN)
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError(
