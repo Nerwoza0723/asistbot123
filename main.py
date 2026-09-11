@@ -1,178 +1,154 @@
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart, Command
+from pathlib import Path
+
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
-import aiosqlite
 
-# === КОНФИГУРАЦИЯ ===
-TELEGRAM_BOT_TOKEN = "8674246097:AAHtXZW5BRIIYE7qOg4EiiSJ_hpCBmFE2zo"
 
-DB_PATH = "tasks.db"
+# =========================
+# НАСТРОЙКИ
+# =========================
 
-# === ИНИЦИАЛИЗАЦИЯ ===
-logging.basicConfig(level=logging.INFO)
+TELEGRAM_BOT_TOKEN = os.getenv("8674246097:AAHtXZW5BRIIYE7qOg4EiiSJ_hpCBmFE2zo")
+
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError(
+        "Не задан токен. Добавьте переменную окружения BOT_TOKEN."
+    )
+
+TASKS_FILE = Path("tasks.json")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
-# === БАЗА ДАННЫХ ===
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                remind_at TEXT NOT NULL,
-                done INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-        """)
-        await db.commit()
 
-async def add_task(user_id: int, text: str, remind_at: datetime):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            INSERT INTO tasks (user_id, text, remind_at, done, created_at)
-            VALUES (?, ?, ?, 0, ?)
-            """,
-            (user_id, text, remind_at.isoformat(), datetime.now().isoformat())
-        )
-        await db.commit()
+# =========================
+# РАБОТА С ФАЙЛОМ ЗАДАЧ
+# =========================
 
-async def get_active_tasks(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            """
-            SELECT id, text, remind_at, done, created_at
-            FROM tasks
-            WHERE user_id = ? AND done = 0
-            ORDER BY remind_at ASC
-            """,
-            (user_id,)
-        )
-        return await cur.fetchall()
-
-async def mark_task_done(task_id: int, user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE tasks SET done = 1 WHERE id = ? AND user_id = ?",
-            (task_id, user_id)
-        )
-        await db.commit()
-
-async def get_due_tasks(now: datetime):
-    # Задачи, у которых remind_at <= now и done = 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            """
-            SELECT id, user_id, text, remind_at
-            FROM tasks
-            WHERE done = 0 AND remind_at <= ?
-            """,
-            (now.isoformat(),)
-        )
-        return await cur.fetchall()
-
-# === ОБРАБОТЧИКИ КОМАНД ===
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer(
-        "Привет! Я бот‑напоминалка.\n\n"
-        "Команды:\n"
-        "/add — добавить задачу (формат: /add Купить продукты 2026-09-10 18:30)\n"
-        "/list — показать все активные задачи\n"
-        "/done <id> — отметить задачу выполненной"
-    )
-
-@dp.message(Command("add"))
-async def cmd_add(message: Message):
-    # Ожидаем: /add Текст задачи YYYY-MM-DD HH:MM
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        await message.answer(
-            "Неверный формат.\nПример:\n/add Купить продукты 2026-09-10 18:30"
-        )
-        return
-
-    task_text = args[1]
-    dt_str = args[2]
+def load_tasks() -> list:
+    if not TASKS_FILE.exists():
+        return []
 
     try:
-        remind_at = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-    except ValueError:
-        await message.answer(
-            "Неверный формат даты/времени. Используйте: YYYY-MM-DD HH:MM"
-        )
-        return
+        with TASKS_FILE.open("r", encoding="utf-8") as file:
+            data = json.load(file)
 
-    if remind_at <= datetime.now():
-        await message.answer("Время напоминания должно быть в будущем.")
-        return
+        if isinstance(data, list):
+            return data
 
-    await add_task(message.from_user.id, task_text, remind_at)
-    await message.answer(
-        f"✅ Задача добавлена:\n«{task_text}»\nНапомнить: {remind_at.strftime('%d.%m.%Y %H:%M')}"
+        return []
+
+    except (json.JSONDecodeError, OSError):
+        logging.exception("Не удалось прочитать tasks.json")
+        return []
+
+
+def save_tasks(tasks: list) -> None:
+    temporary_file = TASKS_FILE.with_suffix(".tmp")
+
+    with temporary_file.open("w", encoding="utf-8") as file:
+        json.dump(tasks, file, ensure_ascii=False, indent=2)
+
+    temporary_file.replace(TASKS_FILE)
+
+
+def get_next_task_id(tasks: list) -> int:
+    if not tasks:
+        return 1
+
+    return max(int(task["id"]) for task in tasks) + 1
+
+
+def add_task(
+    user_id: int,
+    text: str,
+    remind_at: datetime
+) -> int:
+    tasks = load_tasks()
+
+    task_id = get_next_task_id(tasks)
+
+    tasks.append(
+        {
+            "id": task_id,
+            "user_id": user_id,
+            "text": text,
+            "remind_at": remind_at.isoformat(),
+            "done": False,
+            "notified": False,
+            "created_at": datetime.now().isoformat()
+        }
     )
 
-@dp.message(Command("list"))
-async def cmd_list(message: Message):
-    tasks = await get_active_tasks(message.from_user.id)
-    if not tasks:
-        await message.answer("Нет активных задач.")
-        return
+    save_tasks(tasks)
 
-    lines = []
-    for t in tasks:
-        dt = datetime.fromisoformat(t["remind_at"])
-        lines.append(
-            f"{t['id']}. {t['text']} — {dt.strftime('%d.%m.%Y %H:%M')}"
+    return task_id
+
+
+def get_user_active_tasks(user_id: int) -> list:
+    tasks = load_tasks()
+
+    user_tasks = [
+        task
+        for task in tasks
+        if int(task["user_id"]) == user_id
+        and not task.get("done", False)
+    ]
+
+    user_tasks.sort(key=lambda task: task["remind_at"])
+
+    return user_tasks
+
+
+def complete_task(user_id: int, task_id: int) -> bool:
+    tasks = load_tasks()
+    changed = False
+
+    for task in tasks:
+        if (
+            int(task["id"]) == task_id
+            and int(task["user_id"]) == user_id
+            and not task.get("done", False)
+        ):
+            task["done"] = True
+            changed = True
+            break
+
+    if changed:
+        save_tasks(tasks)
+
+    return changed
+
+
+def delete_task(user_id: int, task_id: int) -> bool:
+    tasks = load_tasks()
+
+    new_tasks = [
+        task
+        for task in tasks
+        if not (
+            int(task["id"]) == task_id
+            and int(task["user_id"]) == user_id
         )
+    ]
 
-    text = "Ваши задачи:\n" + "\n".join(lines)
-    await message.answer(text)
+    changed = len(new_tasks) != len(tasks)
 
-@dp.message(Command("done"))
-async def cmd_done(message: Message):
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("Используйте: /done <id задачи>")
-        return
+    if changed:
+        save_tasks(new_tasks)
 
-    task_id = int(args[1])
-    await mark_task_done(task_id, message.from_user.id)
-    await message.answer(f"✅ Задача #{task_id} отмечена выполненной.")
+    return changed
 
-# === ФОНОВАЯ ПРОВЕРКА НАПОМИНАНИЙ ===
-async def reminders_loop():
-    while True:
-        try:
-            now = datetime.now()
-            due = await get_due_tasks(now)
-            for task in due:
-                try:
-                    await bot.send_message(
-                        task["user_id"],
-                        f"⏰ Напоминание:\n{task['text']}\n(запланировано на {datetime.fromisoformat(task['remind_at']).strftime('%d.%m.%Y %H:%M')})"
-                    )
-                    await mark_task_done(task["id"], task["user_id"])
-                except Exception:
-                    logging.exception("Ошибка отправки напоминания")
-        except Exception:
-            logging.exception("Ошибка в цикле напоминаний")
 
-        await asyncio.sleep(60)  # проверка раз в минуту
-
-# === ЗАПУСК ===
-async def main():
-    await init_db()
-    asyncio.create_task(reminders_loop())
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+def get_due_tasks()
