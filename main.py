@@ -1,3 +1,6 @@
+git add main.py requirements.txt
+git commit -m "Add bot dependencies"
+git push
 import asyncio
 import logging
 import os
